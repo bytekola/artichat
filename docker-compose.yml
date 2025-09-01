@@ -1,0 +1,140 @@
+name: artichat
+services:
+  # 1. Backend: REST API with RabbitMQ producer
+  backend:
+    build: ./services/backend
+    image: artichat-backend
+    container_name: artichat-python-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "9080:8082" # REST API (map host 9080 to container 8082)
+    environment:
+      - API_KEY=${API_KEY:-your-api-key-here}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-3.5-turbo}
+      - OPENAI_EMBEDDING_MODEL=${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      - REDIS_URL=redis://redis:6379
+      - CHROMA_HOST=http://chroma:8000
+      - RABBITMQ_URL=amqp://rabbituser:${RABBITMQ_PASSWORD}@rabbitmq:5672/
+      - RABBITMQ_QUEUE=article-ingestion
+      - CACHE_TTL=${CACHE_TTL:-3600}
+      - SEMANTIC_THRESHOLD=${SEMANTIC_THRESHOLD:-0.85}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      redis: { condition: service_healthy }
+      chroma: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+    networks:
+      - app-network
+
+  # 2. Python NLP Worker: Consumes from RabbitMQ queue
+  ingestion-worker:
+    build: ./services/worker
+    image: artichat-worker
+    container_name: artichat-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "9001:8000" # Health check port
+    # Scale workers by running: docker-compose up -d --scale ingestion-worker=3
+    # This enables horizontal scaling for high-volume article processing
+    environment:
+      - CHROMA_HOST=http://chroma:8000
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AZURE_OPENAI_ENABLED=${AZURE_OPENAI_ENABLED}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
+      - AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION}
+      - AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT=${AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT}
+      - AZURE_OPENAI_CHAT_DEPLOYMENT=${AZURE_OPENAI_CHAT_DEPLOYMENT}
+      - AZURE_OPENAI_SUMMARY_DEPLOYMENT=${AZURE_OPENAI_SUMMARY_DEPLOYMENT}
+      - ANALYSIS_MODE=${ANALYSIS_MODE}
+      - LLM_MAX_INPUT_CHARS=${LLM_MAX_INPUT_CHARS}
+      - RABBITMQ_URI=amqp://rabbituser:${RABBITMQ_PASSWORD}@rabbitmq:5672/
+      - RABBITMQ_QUEUE=article-ingestion
+      - REDIS_URL=redis://redis:6379/0 # Redis for distributed locking and status
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      chroma: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks:
+      - app-network
+
+  # 3. Redis: L1/L2 Cache with LRU eviction
+  redis:
+    image: redis:7.2-alpine
+    container_name: artichat-redis
+    restart: unless-stopped
+    ports: ["6379:6379"]
+    volumes:
+      - redis-data:/data
+      - ./configs/redis.conf:/etc/redis/redis.conf:ro
+    command: redis-server /etc/redis/redis.conf
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [app-network]
+
+  # 4. ChromaDB: The Vector Database
+  chroma:
+    image: chromadb/chroma:0.5.23
+    container_name: artichat-chroma
+    restart: unless-stopped
+    ports: ["9000:8000"]
+    volumes: [chroma-data:/chroma/.chroma/index]
+    environment:
+      - CHROMA_SERVER_CORS_ALLOW_ORIGINS=["https://chroma-ui.vercel.app"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      start_period: 10s
+      timeout: 10s
+      retries: 3
+    networks: [app-network]
+
+  # 5. RabbitMQ: Message Queue
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: artichat-rabbitmq
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "5672:5672" # AMQP port
+      - "15672:15672" # Management UI
+    environment:
+      - RABBITMQ_DEFAULT_USER=rabbituser
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD:-defaultpassword}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks: [app-network]
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  redis-data:
+  chroma-data:
+  rabbitmq-data:
