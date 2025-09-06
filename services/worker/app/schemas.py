@@ -83,7 +83,7 @@ class NLPAnalysisResult(BaseModel):
     language_detected: Optional[str] = Field(None, description="Detected language")
     summary: Optional[str] = Field(None, description="AI-generated summary of the article")
     
-    @validator('sentiment_label')
+    @field_validator('sentiment_label')
     def validate_sentiment(cls, v):
         if v is not None:
             # Normalize to uppercase
