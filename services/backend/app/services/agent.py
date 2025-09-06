@@ -63,46 +63,64 @@ class ArticleChatAgent:
         except Exception as e:
             print(f"Error retrieving article from Redis: {e}")
             return None
-    
+
+    async def _get_article_from_redis_async(self, url: str) -> Optional[Dict[str, Any]]:
+        try:
+            if not self.redis_client:
+                return None
+            article_key = self._generate_article_key(url)
+            article_data = await self.redis_client.hgetall(article_key) # type: ignore
+            if not article_data:
+                return None
+            return {k.decode() if isinstance(k, bytes) else k: 
+                   v.decode() if isinstance(v, bytes) else v 
+                   for k, v in article_data.items()}
+        except Exception as e:
+            return None
+
     async def _semantic_search_with_documents(self, query: str, k: int = 3) -> List[Tuple[str, Dict[str, Any], Document]]:
         try:
             if not self.vectorstore:
                 return []
             
-            results = self.vectorstore.similarity_search(query, k=k)
+            results = await asyncio.to_thread(self.vectorstore.similarity_search, query, k)
+            
+            urls = [chunk_doc.metadata.get('source_url', chunk_doc.metadata.get('source', '')) for chunk_doc in results]
+            articles = {}
+            for url in urls:
+                if url:
+                    article_data = await self._get_article_from_redis_async(url)
+                    if article_data:
+                        articles[url] = article_data
             
             enriched_results = []
-            for chunk_doc in results:
-                url = chunk_doc.metadata.get('source_url', chunk_doc.metadata.get('source', ''))
-                if url:
-                    full_article = self._get_article_from_redis_sync(url)
-                    if full_article:
-                        enriched_results.append((url, full_article, chunk_doc))
-                    else:
-                        fallback_data = {
-                            'title': chunk_doc.metadata.get('title', 'Unknown'),
-                            'content': chunk_doc.page_content,
-                            'url': url,
-                            'summary': chunk_doc.metadata.get('summary', ''),
-                            'keywords': chunk_doc.metadata.get('keywords', []),
-                            'sentiment': chunk_doc.metadata.get('sentiment', '')
-                        }
-                        enriched_results.append((url, fallback_data, chunk_doc))
+            for chunk_doc, url in zip(results, urls):
+                if url and url in articles:
+                    enriched_results.append((url, articles[url], chunk_doc))
+                else:
+                    fallback_data = {
+                        'title': chunk_doc.metadata.get('title', 'Unknown'),
+                        'content': chunk_doc.page_content,
+                        'url': url,
+                        'summary': chunk_doc.metadata.get('summary', ''),
+                        'keywords': chunk_doc.metadata.get('keywords', []),
+                        'sentiment': chunk_doc.metadata.get('sentiment', '')
+                    }
+                    enriched_results.append((url, fallback_data, chunk_doc))
             
             return enriched_results
-        except Exception as e:
-            print(f"Error in semantic search with documents: {e}")
+        except Exception:
             return []
 
     async def initialize(self):
         """Initialize the agent with LangChain components and Redis connection."""
         try:
             # Initialize Redis connection
-            self.redis_client = redis.from_url(settings.redis_url)
+            self.redis_client = await redis.from_url(settings.redis_url)
             
             # Initialize OpenAI components
             self.llm = ChatOpenAI(
-                model="gpt-4o-mini",
+                model="gpt-4o",
                 temperature=0.1
             )
             
@@ -150,49 +168,9 @@ Always provide comprehensive, well-contextualized answers that show both the spe
             print(f"Error initializing ArticleChatAgent: {e}")
             raise
 
-    def _create_tools(self) -> List[Tool]:
-        """Create tools for the agent with semantic-search-first approach."""
-        return [
-            Tool(
-                name="get_article_by_url",
-                description="Get complete article content and metadata for a specific URL. Use when user mentions a specific URL.",
-                func=self._get_article_by_url
-            ),
-            Tool(
-                name="get_article_summary",
-                description="Get summaries using semantic search first, then complete documents. Shows both relevant excerpts and full summaries.",
-                func=self._get_article_summary_semantic_first
-            ),
-            Tool(
-                name="analyze_sentiment",
-                description="Analyze sentiment using semantic search + complete documents. Shows relevant excerpts and sentiment analysis.",
-                func=self._analyze_sentiment_semantic_first
-            ),
-            Tool(
-                name="extract_keywords",
-                description="Extract keywords using semantic search + complete documents. Shows relevant excerpts and comprehensive keywords.",
-                func=self._extract_keywords_semantic_first
-            ),
-            Tool(
-                name="compare_articles",
-                description="Compare articles using semantic search + complete documents for rich comparison context.",
-                func=self._compare_articles_semantic_first
-            ),
-            Tool(
-                name="search_articles",
-                description="Search articles using semantic search first, then enrich with complete document data.",
-                func=self._search_articles_semantic_first
-            ),
-            Tool(
-                name="find_entities",
-                description="Find entities using semantic search + complete documents for comprehensive entity extraction.",
-                func=self._find_entities_semantic_first
-            )
-        ]
-
-    def _get_article_by_url(self, url: str) -> str:
+    async def _get_article_by_url(self, url: str) -> str:
         try:
-            article_data = self._get_article_from_redis_sync(url)
+            article_data = await self._get_article_from_redis_async(url)
             
             if not article_data:
                 return f"Article not found in document store for URL: {url}"
@@ -203,45 +181,45 @@ Always provide comprehensive, well-contextualized answers that show both the spe
             keywords = article_data.get('keywords', [])
             sentiment = article_data.get('sentiment', '')
             
-            result = f"**{title}**\\nURL: {url}\\n\\n"
+            result = f"**{title}**\nURL: {url}\n\n"
             
             if summary:
-                result += f"**Summary:** {summary}\\n\\n"
+                result += f"**Summary:** {summary}\n\n"
             
             if keywords:
                 if isinstance(keywords, list):
-                    result += f"**Keywords:** {', '.join(keywords)}\\n\\n"
+                    result += f"**Keywords:** {', '.join(keywords)}\n\n"
                 else:
-                    result += f"**Keywords:** {keywords}\\n\\n"
+                    result += f"**Keywords:** {keywords}\n\n"
             
             if sentiment:
-                result += f"**Sentiment:** {sentiment}\\n\\n"
+                result += f"**Sentiment:** {sentiment}\n\n"
             
-            result += f"**Content:**\\n{content[:2000]}" + ("..." if len(content) > 2000 else "")
+            result += f"**Content:**\n{content[:2000]}" + ("..." if len(content) > 2000 else "")
             
             return result
             
         except Exception as e:
             return f"Error retrieving article: {str(e)}"
 
-    def _get_article_summary_semantic_first(self, query: str) -> str:
+    async def _get_article_summary_semantic_first(self, query: str) -> str:
         try:
             urls = self._extract_urls_from_query(query)
             if urls:
                 summaries = []
                 for url in urls:
-                    article_data = self._get_article_from_redis_sync(url)
+                    article_data = await self._get_article_from_redis_async(url)
                     if article_data:
                         title = article_data.get('title', 'Unknown Title')
                         summary = article_data.get('summary', '')
                         if summary:
-                            summaries.append(f"**{title}**\\nURL: {url}\\n\\n{summary}")
+                            summaries.append(f"**{title}**\nURL: {url}\n\n{summary}")
                         else:
-                            summaries.append(f"**{title}**\\nURL: {url}\\n\\nNo cached summary available.")
+                            summaries.append(f"**{title}**\nURL: {url}\n\nNo cached summary available.")
                 if summaries:
-                    return "\\n\\n---\\n\\n".join(summaries)
+                    return "\n\n---\n\n".join(summaries)
             
-            results = asyncio.run(self._semantic_search_with_documents(query, k=3))
+            results = await self._semantic_search_with_documents(query, k=3)
             if not results:
                 return "No articles found matching your query."
             
@@ -250,21 +228,15 @@ Always provide comprehensive, well-contextualized answers that show both the spe
                 title = article_data.get('title', 'Unknown Title')
                 cached_summary = article_data.get('summary', '')
                 
-                result = f"**{title}**\\nURL: {url}\\n"
-                result += f"**Why relevant:** {chunk_doc.page_content[:200]}...\\n\\n"
+                result = f"**{title}**\nURL: {url}\n"
+                result += f"**Why relevant:** {chunk_doc.page_content[:200]}...\n\n"
                 
                 if cached_summary:
                     result += f"**Summary:** {cached_summary}"
                 else:
                     full_content = article_data.get('content', article_data.get('full_text', ''))
                     if self.llm and full_content:
-                        prompt = f"""Summarize this article focusing on "{query}":
-                        
-Title: {title}
-Relevant excerpt: {chunk_doc.page_content}
-Full content: {full_content[:1500]}
-
-Provide a focused summary:"""
+                        prompt = f"""Summarize this article focusing on \"{query}\":\n\nTitle: {title}\nRelevant excerpt: {chunk_doc.page_content}\nFull content: {full_content[:1500]}\n\nProvide a focused summary:"""
                         try:
                             response = self.llm.invoke(prompt)
                             summary = response.content if hasattr(response, 'content') else str(response)
@@ -276,30 +248,30 @@ Provide a focused summary:"""
                 
                 summaries.append(result)
             
-            return "\\n\\n---\\n\\n".join(summaries)
+            return "\n\n---\n\n".join(summaries)
             
         except Exception as e:
             return f"Error getting summaries: {str(e)}"
 
-    def _analyze_sentiment_semantic_first(self, query: str) -> str:
+    async def _analyze_sentiment_semantic_first(self, query: str) -> str:
         try:
             urls = self._extract_urls_from_query(query)
             if urls:
                 analyses = []
                 for url in urls:
-                    article_data = self._get_article_from_redis_sync(url)
+                    article_data = await self._get_article_from_redis_async(url)
                     if article_data:
                         title = article_data.get('title', 'Unknown Title')
                         sentiment = article_data.get('sentiment', '')
                         if sentiment:
-                            analyses.append(f"**{title}**\\nURL: {url}\\n\\nSentiment: {sentiment}")
+                            analyses.append(f"**{title}**\nURL: {url}\n\nSentiment: {sentiment}")
                         else:
-                            analyses.append(f"**{title}**\\nURL: {url}\\n\\nNo cached sentiment analysis available.")
+                            analyses.append(f"**{title}**\nURL: {url}\n\nNo cached sentiment analysis available.")
                 if analyses:
-                    return "\\n\\n---\\n\\n".join(analyses)
+                    return "\n\n---\n\n".join(analyses)
             
             # Semantic search first approach
-            results = asyncio.run(self._semantic_search_with_documents(query, k=3))
+            results = await self._semantic_search_with_documents(query, k=3)
             if not results:
                 return "No articles found for sentiment analysis."
             
@@ -308,8 +280,8 @@ Provide a focused summary:"""
                 title = article_data.get('title', 'Unknown Title')
                 cached_sentiment = article_data.get('sentiment', '')
                 
-                result = f"**{title}**\\nURL: {url}\\n"
-                result += f"**Relevant excerpt:** {chunk_doc.page_content[:200]}...\\n\\n"
+                result = f"**{title}**\nURL: {url}\n"
+                result += f"**Relevant excerpt:** {chunk_doc.page_content[:200]}...\n\n"
                 
                 if cached_sentiment:
                     result += f"**Sentiment:** {cached_sentiment}"
@@ -317,13 +289,7 @@ Provide a focused summary:"""
                     # Generate contextual sentiment analysis
                     full_content = article_data.get('content', article_data.get('full_text', ''))
                     if self.llm and full_content:
-                        prompt = f"""Analyze sentiment focusing on "{query}":
-                        
-Title: {title}
-Relevant excerpt: {chunk_doc.page_content}
-Full content: {full_content[:1000]}
-
-Provide sentiment analysis:"""
+                        prompt = f"""Analyze sentiment focusing on \"{query}\":\n\nTitle: {title}\nRelevant excerpt: {chunk_doc.page_content}\nFull content: {full_content[:1000]}\n\nProvide sentiment analysis:"""
                         try:
                             response = self.llm.invoke(prompt)
                             sentiment = response.content if hasattr(response, 'content') else str(response)
@@ -335,31 +301,31 @@ Provide sentiment analysis:"""
                 
                 analyses.append(result)
             
-            return "\\n\\n---\\n\\n".join(analyses)
+            return "\n\n---\n\n".join(analyses)
             
         except Exception as e:
             return f"Error analyzing sentiment: {str(e)}"
 
-    def _extract_keywords_semantic_first(self, query: str) -> str:
+    async def _extract_keywords_semantic_first(self, query: str) -> str:
         try:
             urls = self._extract_urls_from_query(query)
             if urls:
                 analyses = []
                 for url in urls:
-                    article_data = self._get_article_from_redis_sync(url)
+                    article_data = await self._get_article_from_redis_async(url)
                     if article_data:
                         title = article_data.get('title', 'Unknown Title')
                         keywords = article_data.get('keywords', [])
                         if keywords:
                             keywords_str = ", ".join(keywords) if isinstance(keywords, list) else str(keywords)
-                            analyses.append(f"**{title}**\\nURL: {url}\\n\\nKeywords: {keywords_str}")
+                            analyses.append(f"**{title}**\nURL: {url}\n\nKeywords: {keywords_str}")
                         else:
-                            analyses.append(f"**{title}**\\nURL: {url}\\n\\nNo cached keywords available.")
+                            analyses.append(f"**{title}**\nURL: {url}\n\nNo cached keywords available.")
                 if analyses:
-                    return "\\n\\n---\\n\\n".join(analyses)
+                    return "\n\n---\n\n".join(analyses)
             
             # Semantic search first approach
-            results = asyncio.run(self._semantic_search_with_documents(query, k=3))
+            results = await self._semantic_search_with_documents(query, k=3)
             if not results:
                 return "No articles found for keyword extraction."
             
@@ -368,8 +334,8 @@ Provide sentiment analysis:"""
                 title = article_data.get('title', 'Unknown Title')
                 cached_keywords = article_data.get('keywords', [])
                 
-                result = f"**{title}**\\nURL: {url}\\n"
-                result += f"**Relevant excerpt:** {chunk_doc.page_content[:200]}...\\n\\n"
+                result = f"**{title}**\nURL: {url}\n"
+                result += f"**Relevant excerpt:** {chunk_doc.page_content[:200]}...\n\n"
                 
                 if cached_keywords:
                     keywords_str = ", ".join(cached_keywords) if isinstance(cached_keywords, list) else str(cached_keywords)
@@ -378,13 +344,7 @@ Provide sentiment analysis:"""
                     # Generate contextual keywords
                     full_content = article_data.get('content', article_data.get('full_text', ''))
                     if self.llm and full_content:
-                        prompt = f"""Extract keywords focusing on "{query}":
-                        
-Title: {title}
-Relevant excerpt: {chunk_doc.page_content}
-Full content: {full_content[:1000]}
-
-Extract key terms and concepts:"""
+                        prompt = f"""Extract keywords focusing on \"{query}\":\n\nTitle: {title}\nRelevant excerpt: {chunk_doc.page_content}\nFull content: {full_content[:1000]}\n\nExtract key terms and concepts:"""
                         try:
                             response = self.llm.invoke(prompt)
                             keywords = response.content if hasattr(response, 'content') else str(response)
@@ -396,14 +356,14 @@ Extract key terms and concepts:"""
                 
                 analyses.append(result)
             
-            return "\\n\\n---\\n\\n".join(analyses)
+            return "\n\n---\n\n".join(analyses)
             
         except Exception as e:
             return f"Error extracting keywords: {str(e)}"
 
-    def _compare_articles_semantic_first(self, query: str) -> str:
+    async def _compare_articles_semantic_first(self, query: str) -> str:
         try:
-            results = asyncio.run(self._semantic_search_with_documents(query, k=5))
+            results = await self._semantic_search_with_documents(query, k=5)
             if len(results) < 2:
                 return "Need at least 2 articles to compare. Please refine your search."
             
@@ -414,16 +374,16 @@ Extract key terms and concepts:"""
                 keywords = article_data.get('keywords', [])
                 sentiment = article_data.get('sentiment', '')
                 
-                info = f"**{title}**\\nURL: {url}"
-                info += f"\\n**Relevant excerpt:** {chunk_doc.page_content[:300]}..."
+                info = f"**{title}**\nURL: {url}"
+                info += f"\n**Relevant excerpt:** {chunk_doc.page_content[:300]}..."
                 
                 if summary:
-                    info += f"\\n**Summary:** {summary}"
+                    info += f"\n**Summary:** {summary}"
                 if keywords:
                     keywords_str = ", ".join(keywords) if isinstance(keywords, list) else str(keywords)
-                    info += f"\\n**Keywords:** {keywords_str}"
+                    info += f"\n**Keywords:** {keywords_str}"
                 if sentiment:
-                    info += f"\\n**Sentiment:** {sentiment}"
+                    info += f"\n**Sentiment:** {sentiment}"
                 
                 articles_info.append(info)
             
@@ -431,16 +391,7 @@ Extract key terms and concepts:"""
                 return "No article data available for comparison."
             
             # Generate comparison
-            comparison_prompt = f"""Compare these {len(articles_info)} articles about "{query}":
-
-{chr(10).join([f'Article {i+1}:\\n{article}\\n' for i, article in enumerate(articles_info)])}
-
-Provide comparative analysis focusing on:
-1. Common themes and differences
-2. How each article's relevant excerpt relates to "{query}"
-3. Different perspectives or approaches
-4. Complementary insights
-"""
+            comparison_prompt = f"""Compare these {len(articles_info)} articles about \"{query}\":\n\n{chr(10).join([f'Article {i+1}:\n{article}\n' for i, article in enumerate(articles_info)])}\n\nProvide comparative analysis focusing on:\n1. Common themes and differences\n2. How each article's relevant excerpt relates to \"{query}\"\n3. Different perspectives or approaches\n4. Complementary insights\n"""
             
             if not self.llm:
                 return f"Found {len(articles_info)} articles but LLM not initialized for comparison."
@@ -448,14 +399,14 @@ Provide comparative analysis focusing on:
             response = self.llm.invoke(comparison_prompt)
             analysis = response.content if hasattr(response, 'content') else str(response)
             
-            return f"**Article Comparison Analysis**\\n\\n{analysis}"
+            return f"**Article Comparison Analysis**\n\n{analysis}"
             
         except Exception as e:
             return f"Error comparing articles: {str(e)}"
 
-    def _search_articles_semantic_first(self, query: str) -> str:
+    async def _search_articles_semantic_first(self, query: str) -> str:
         try:
-            results = asyncio.run(self._semantic_search_with_documents(query, k=5))
+            results = await self._semantic_search_with_documents(query, k=5)
             if not results:
                 return "No articles found matching your search query."
             
@@ -464,8 +415,8 @@ Provide comparative analysis focusing on:
                 title = article_data.get('title', 'Unknown Title')
                 summary = article_data.get('summary', '')
                 
-                result = f"**{title}**\\nURL: {url}\\n"
-                result += f"**Why relevant:** {chunk_doc.page_content[:300]}...\\n"
+                result = f"**{title}**\nURL: {url}\n"
+                result += f"**Why relevant:** {chunk_doc.page_content[:300]}...\n"
                 
                 if summary:
                     result += f"**Summary:** {summary}"
@@ -475,14 +426,14 @@ Provide comparative analysis focusing on:
                 
                 search_results.append(result)
             
-            return f"**Search Results ({len(results)} articles found)**\\n\\n" + "\\n\\n---\\n\\n".join(search_results)
+            return f"**Search Results ({len(results)} articles found)**\n\n" + "\n\n---\n\n".join(search_results)
             
         except Exception as e:
             return f"Error searching articles: {str(e)}"
 
-    def _find_entities_semantic_first(self, query: str) -> str:
+    async def _find_entities_semantic_first(self, query: str) -> str:
         try:
-            results = asyncio.run(self._semantic_search_with_documents(query, k=5))
+            results = await self._semantic_search_with_documents(query, k=5)
             if not results:
                 return "No articles found for entity extraction."
             
@@ -499,22 +450,7 @@ Provide comparative analysis focusing on:
             combined_semantic = " ".join(semantic_chunks)
             combined_full = " ".join(full_excerpts)
             
-            entity_prompt = f"""Extract named entities from articles about "{query}":
-
-**Semantically relevant sections:**
-{combined_semantic[:1500]}...
-
-**Full article excerpts:**
-{combined_full[:1000]}...
-
-Identify and categorize:
-- People (names, roles)
-- Organizations (companies, institutions)  
-- Locations (countries, cities)
-- Technologies/Products
-- Key dates or events
-- Most frequently mentioned entities
-"""
+            entity_prompt = f"""Extract named entities from articles about \"{query}\":\n\n**Semantically relevant sections:**\n{combined_semantic[:1500]}...\n\n**Full article excerpts:**\n{combined_full[:1000]}...\n\nIdentify and categorize:\n- People (names, roles)\n- Organizations (companies, institutions)  \n- Locations (countries, cities)\n- Technologies/Products\n- Key dates or events\n- Most frequently mentioned entities\n"""
             
             if not self.llm:
                 return f"Found {len(results)} articles but LLM not initialized for entity extraction."
@@ -522,7 +458,7 @@ Identify and categorize:
             response = self.llm.invoke(entity_prompt)
             analysis = response.content if hasattr(response, 'content') else str(response)
             
-            return f"**Named Entity Analysis (from {len(results)} articles)**\\n\\n{analysis}"
+            return f"**Named Entity Analysis (from {len(results)} articles)**\n\n{analysis}"
             
         except Exception as e:
             return f"Error finding entities: {str(e)}"
@@ -543,5 +479,50 @@ Identify and categorize:
             return result.get("output", "Sorry, I couldn't process your question.")
             
         except Exception as e:
-            print(f"Error processing question: {e}")
             return f"Error processing your question: {str(e)}"
+
+    def _create_tools(self) -> List[Tool]:
+        return [
+            Tool(
+                name="get_article_by_url",
+                description="Get complete article content and metadata for a specific URL. Use when user mentions a specific URL.",
+                func=self._get_article_by_url,
+                coroutine=True
+            ),
+            Tool(
+                name="get_article_summary",
+                description="Get summaries using semantic search first, then complete documents. Shows both relevant excerpts and full summaries.",
+                func=self._get_article_summary_semantic_first,
+                coroutine=True
+            ),
+            Tool(
+                name="analyze_sentiment",
+                description="Analyze sentiment using semantic search + complete documents. Shows relevant excerpts and sentiment analysis.",
+                func=self._analyze_sentiment_semantic_first,
+                coroutine=True
+            ),
+            Tool(
+                name="extract_keywords",
+                description="Extract keywords using semantic search + complete documents. Shows relevant excerpts and comprehensive keywords.",
+                func=self._extract_keywords_semantic_first,
+                coroutine=True
+            ),
+            Tool(
+                name="compare_articles",
+                description="Compare articles using semantic search + complete documents for rich comparison context.",
+                func=self._compare_articles_semantic_first,
+                coroutine=True
+            ),
+            Tool(
+                name="search_articles",
+                description="Search articles using semantic search first, then enrich with complete document data.",
+                func=self._search_articles_semantic_first,
+                coroutine=True
+            ),
+            Tool(
+                name="find_entities",
+                description="Find entities using semantic search + complete documents for comprehensive entity extraction.",
+                func=self._find_entities_semantic_first,
+                coroutine=True
+            )
+        ]
