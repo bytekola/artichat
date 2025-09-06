@@ -30,9 +30,11 @@ graph TD
             subgraph Consumers["2. Background Processing (Scalable)"]
                 E -->|Consumes Job| F(Python Worker)
                 F -->|a. Fetch & Clean| G[Clean Text]
-                G -->|b. Deterministic NLP| H[Structured Metadata]
-                G -->|c. Embed Chunks w/ OpenAI| I[Text Chunks + Vectors]
-                H & I -->|d. Store Result| J[(ChromaDB - Articles)]
+                G -->|b. Deterministic NLP or LLM-based extraction| H[Structured Metadata]
+                G -->|c. Chunk Text| G1[Text Chunks]
+                G1 -->|d. Embed Chunks w/ OpenAI| I[Chunks + Vectors]
+                I -->|e. Store Chunks| J[(ChromaDB - Articles)]
+                G & H -->|f. Store Full Document| J1[(Redis - Full Documents)]
             end
         end
 
@@ -51,8 +53,9 @@ graph TD
             end
             subgraph RAGPipeline["3. RAG Pipeline (Full Execution)"]
                 R -- "No" --> J
-                J --> S[Retrieved Context + Metadata]
-                K & S --> T{LLM} --> J
+                J -->|Retrieve Chunks| S[Retrieved Context + Metadata]
+                J1 -->|Retrieve Full Document| S
+                K & S --> T{LLM}
                 T -->|Generate Answer| U[Final Answer]
                 U -->|Store in L1| M
                 P & U -->|Store in L2| Q
