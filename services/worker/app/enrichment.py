@@ -44,7 +44,7 @@ def get_nlp_tools():
     """Initialize and cache NLP tools."""
     logging.info("🔧 Loading NLP tools...")
     sentiment_analyzer = SentimentIntensityAnalyzer()
-    keyword_extractor = yake.KeywordExtractor(n=10, dedupLim=0.9, top=15, features=None)
+    keyword_extractor = yake.KeywordExtractor(n=2, dedupLim=0.2, top=15, features=None)
     return sentiment_analyzer, keyword_extractor
 
 
