@@ -2,6 +2,7 @@
 import os
 from functools import lru_cache
 
+import langfuse
 import redis
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings
@@ -10,6 +11,19 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """Configuration settings loaded from environment variables with LangChain optimizations."""
     
+    langfuse_public_key: str = Field(
+        default_factory=lambda: os.getenv("LANGFUSE_PUBLIC_KEY", ""),
+        description="Langfuse public key for logging"
+    )
+    langfuse_secret_key: str = Field(
+        default_factory=lambda: os.getenv("LANGFUSE_SECRET_KEY", ""),
+        description="Langfuse secret key for logging"
+    )
+    langfuse_host: str = Field(
+        default_factory=lambda: os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
+        description="Langfuse host URL"
+    )
+
     # RabbitMQ Configuration
     rabbitmq_uri: str = Field(
         default_factory=lambda: os.getenv("RABBITMQ_URI", "amqp://guest:guest@localhost:5672/"),

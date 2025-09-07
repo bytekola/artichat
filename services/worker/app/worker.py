@@ -144,6 +144,7 @@ def process_article_job(raw_body: bytes) -> Optional[IngestionResult]:
         logger.info(f"Running {settings.analysis_mode} analysis")
         nlp_result = run_analysis(
             full_text=content,
+            external_request_id=job_id,
             extra_context={"url": url, "title": article_metadata.title or ""}
         )
         

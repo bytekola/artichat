@@ -28,6 +28,7 @@ services:
       artichat-redis: { condition: service_healthy }
       chroma: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
+      ingestion-worker: { condition: service_healthy }
     networks:
       - app-network
 
