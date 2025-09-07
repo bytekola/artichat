@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     cache_ttl: int = int(os.getenv("CACHE_TTL", "3600"))  # 1 hour
     semantic_threshold: float = float(os.getenv("SEMANTIC_THRESHOLD", "0.85"))
     
+    # Langfuse Configuration
+    langfuse_public_key: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")
+    langfuse_secret_key: str = os.getenv("LANGFUSE_SECRET_KEY", "")
+    langfuse_host: str = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+    
     class Config:
         env_file = ".env"
 
