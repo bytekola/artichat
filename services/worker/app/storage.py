@@ -119,7 +119,8 @@ def chunk_embed_and_store(
     full_text: str, 
     metadata: ArticleMetadata, 
     url: str,
-    summary: Optional[str] = None
+    summary: Optional[str] = None,
+    overwrite: bool = False
 ) -> int:
     """    
     1. Store complete article in Redis Document Store
@@ -136,6 +137,7 @@ def chunk_embed_and_store(
         metadata: Structured metadata object for the article
         url: The source URL of the article
         summary: AI-generated summary (optional)
+        overwrite: If True, delete existing chunks before storing new ones (default: False)
         
     Returns:
         Number of chunks successfully stored
@@ -212,7 +214,6 @@ def chunk_embed_and_store(
             logging.error(f"All chunks failed validation for {url}. Aborting storage.")
             return 0
         
-        # Use LangChain's filter_complex_metadata for ChromaDB compatibility
         try:
             filtered_documents = filter_complex_metadata(documents_for_filtering)
             texts = [doc.page_content for doc in filtered_documents]
@@ -228,7 +229,27 @@ def chunk_embed_and_store(
                 filtered_metadata = {k: v for k, v in doc.metadata.items() if v is not None and isinstance(v, (str, int, float, bool))}
                 metadatas.append(filtered_metadata)
         
-        # Store chunks in ChromaDB Vector Store with embeddings
+        if overwrite:
+            try:
+                existing_results = vectorstore.similarity_search(
+                    query="", 
+                    k=1000, 
+                    filter={"source_url": url}
+                )
+                existing_ids = []
+                for result in existing_results:
+                    chunk_id = result.metadata.get("chunk_id")
+                    if chunk_id:
+                        existing_ids.append(chunk_id)
+                
+                if existing_ids:
+                    vectorstore.delete(ids=existing_ids)
+                    logging.info(f"🗑️  Cleaned up {len(existing_ids)} existing chunks for overwrite: {url}")
+                else:
+                    logging.info(f"🗑️  No existing chunks found to clean up for: {url}")
+            except Exception as e:
+                logging.warning(f"⚠️  Failed to clean up existing chunks (continuing anyway): {e}")
+        
         vectorstore.add_texts(texts=texts, metadatas=metadatas, ids=ids)
         
         logging.info(f"Successfully stored {len(document_chunks)} chunks with Redis references")

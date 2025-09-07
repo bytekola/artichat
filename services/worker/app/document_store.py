@@ -1,23 +1,19 @@
 """
-Redis Document Store implementation for the "Best of Breed" architecture.
+Redis Document Store implementation for ingestion worker.
 
-This module handles:
-1. Storing complete article and content in Redis (Document Store)
-2. Generating hashed keys for efficient storage and retrieval
-3. Providing methods to store/retrieve full article data
+This module handles storing complete article and content in Redis (Document Store)
 
 The complementary Vector Store (ChromaDB) stores chunks with references to this document store.
 """
 
 import hashlib
 import logging
-from datetime import datetime
 from typing import Optional
 
 from pydantic import HttpUrl, ValidationError
 
 from .config import get_redis_client, settings
-from .schemas import ArticleMetadata, CachedQuery, StoredArticle
+from .schemas import ArticleMetadata, StoredArticle
 
 logger = logging.getLogger(__name__)
 
@@ -105,99 +101,25 @@ class DocumentStore:
             raise
     
     @staticmethod
-    def get_article(url: str) -> Optional[StoredArticle]:
+    def article_exists(url: str) -> bool:
         """
-        Retrieve complete article data from Redis Document Store.
+        Check if an article already exists in the document store.
         
         Args:
             url: Article source URL
             
         Returns:
-            StoredArticle object or None if not found
+            True if the article exists, False otherwise
         """
         try:
             key = DocumentStore._generate_article_key(url)
             redis_client = get_redis_client()
-            json_data = redis_client.get(key)
-
-            if json_data is None:
-                logger.debug(f"📄 Article not found in document store: {url}")
-                return None
-
-            document = StoredArticle.model_validate_json(str(json_data))
-            logger.debug(f"Retrieved article document: {key}")
-            return document
-        except ValidationError as e:
-            logger.error(f"ERROR: Pydantic validation failed on retrieval for {url}: {e}")
-            return None
+            exists = redis_client.exists(key)
+            return bool(exists)
         except Exception as e:
-            logger.error(f"ERROR: Failed to retrieve article document for {url}: {e}")
-            return None
+            logger.error(f"ERROR: Failed to check article existence for {url}: {e}")
+            return False
     
-    @staticmethod
-    def get_article_by_key(key: str) -> Optional[StoredArticle]:
-        """
-        Retrieve article data by Redis key (useful for chunk references).
-        
-        Args:
-            key: Redis key (format: article:<hash>)
-            
-        Returns:
-            StoredArticle object or None if not found
-        """
-        try:
-            redis_client = get_redis_client()
-            json_data = redis_client.get(key)
-
-            if json_data is None:
-                logger.debug(f"📄 Document not found: {key}")
-                return None
-
-            document = StoredArticle.model_validate_json(str(json_data))
-            logger.debug(f"Retrieved document: {key}")
-            return document
-        except ValidationError as e:
-            logger.error(f"ERROR: Pydantic validation failed on retrieval for key {key}: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"ERROR: Failed to retrieve document: {key} - {e}")
-            return None
-    
-    @staticmethod
-    def cache_query_response(query: str, response: str, ttl_hours: int = 1) -> str:
-        """
-        Cache a query response for fast repeated requests.
-        
-        Args:
-            query: The user's original question
-            response: The generated answer
-            ttl_hours: How long to cache the response (hours)
-            
-        Returns:
-            The Redis key used for caching
-        """
-        try:
-            key = DocumentStore._generate_cache_key(query)
-            
-            cache_data = CachedQuery(query=query, response=response)
-            
-            redis_client = get_redis_client()
-            redis_client.setex(
-                key,
-                ttl_hours * 3600,  # Convert hours to seconds
-                cache_data.model_dump_json()
-            )
-            
-            logger.info(f"Query response cached: {key[:16]}...")
-            return key
-            
-        except ValidationError as e:
-            logger.error(f"ERROR: Pydantic validation failed for query cache: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"ERROR: Failed to cache query response: {e}")
-            raise
-        
     @staticmethod
     def health_check() -> bool:
         """

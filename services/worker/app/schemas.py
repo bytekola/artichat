@@ -12,6 +12,7 @@ class IngestionJob(BaseModel):
     priority: Optional[int] = Field(default=0, ge=0, le=10, description="Job priority (0-10)")
     retry_count: Optional[int] = Field(default=0, ge=0, description="Number of retry attempts")
     created_at: Optional[datetime] = Field(default_factory=datetime.now, description="Job creation timestamp")
+    overwrite: Optional[bool] = Field(default=False, description="Whether to overwrite existing article data")
 
     class Config:
         json_encoders = {
@@ -101,18 +102,6 @@ class StoredArticle(BaseModel):
     metadata: ArticleMetadata
     summary: Optional[str] = None
     stored_at: datetime = Field(default_factory=datetime.now)
-
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
-
-
-class CachedQuery(BaseModel):
-    """Schema for a cached query-response pair in Redis."""
-    query: str
-    response: str
-    cached_at: datetime = Field(default_factory=datetime.now)
 
     class Config:
         json_encoders = {

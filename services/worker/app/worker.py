@@ -16,6 +16,7 @@ import redis
 from pydantic import ValidationError
 
 from app.config import get_redis_client, settings
+from app.document_store import DocumentStore
 from app.enrichment import run_analysis
 from app.loader import load_document_from_url
 from app.schemas import ArticleMetadata, IngestionJob, IngestionResult, JobStatus
@@ -122,6 +123,20 @@ def process_article_job(raw_body: bytes) -> Optional[IngestionResult]:
         lock_acquired = True
         StatusTracker.update(url, "processing")
         
+        # 2.5. Check if article already exists (unless overwrite is requested)
+        if not job.overwrite and DocumentStore.article_exists(url):
+            logger.info(f"⏭️  Skipping {url} - article already exists (overwrite=False)")
+            StatusTracker.release_processing_lock(url)
+            lock_acquired = False
+            return IngestionResult(
+                url=url,
+                success=True,
+                error_message="Skipped - article already exists",
+                chunks_created=0,
+                processing_time_seconds=(datetime.now() - start_time).total_seconds(),
+                metadata=None
+            )
+        
         # 3. Load article content
         content, metadata_dict = load_document_from_url(url)
         if not content:
@@ -163,7 +178,8 @@ def process_article_job(raw_body: bytes) -> Optional[IngestionResult]:
             full_text=content,
             metadata=article_metadata,
             url=url,
-            summary=nlp_result.summary
+            summary=nlp_result.summary,
+            overwrite=job.overwrite or False
         )
         
         if chunks_created > 0:
