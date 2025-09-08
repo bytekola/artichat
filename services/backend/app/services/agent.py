@@ -178,8 +178,6 @@ METHODOLOGY:
                 elif field == 'content':
                     # Map to full_text field
                     value = data.get('full_text', 'Not available')
-                    if isinstance(value, str) and len(value) > 2000:
-                        value = value[:2000] + "..."
                 else:
                     # Direct field access for title, summary
                     value = data.get(field, 'Not available')
