@@ -63,7 +63,7 @@ graph TD
             end
         end
 
-        subgraph Observability["Observability (NOT IMPLEMENTED)"]
+        subgraph Observability["Observability"]
             L -- "Trace Data" --> V((LangFuse))
             T -- "LLM Calls" --> V
         end
