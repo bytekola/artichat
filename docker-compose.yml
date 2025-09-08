@@ -82,7 +82,6 @@ services:
     image: chromadb/chroma:0.5.23
     container_name: artichat-chroma
     restart: unless-stopped
-    # FIX: Changed host port from 8001 to 8100 to resolve conflict.
     ports: ["8100:8000"]
     volumes: [chroma-data:/chroma/.chroma/index]
     environment:
