@@ -67,7 +67,7 @@ async def ingest(
 ):
     """Queue article for processing by worker."""
     url = str(request.url)
-    result = await ingestion_service.queue_job(url, request.force)
+    result = await ingestion_service.queue_job(url, request.overwrite)
     
     return IngestResponse(
         message=result["message"],

@@ -25,8 +25,8 @@ class IngestionService:
         
         # Connect to Redis for status checking
         self.redis = redis.from_url(settings.redis_url)
-    
-    async def queue_job(self, url: str, force: bool = False) -> dict:
+
+    async def queue_job(self, url: str, overwrite: bool = False) -> dict:
         """Queue an ingestion job."""
         if not self.rabbitmq:
             raise RuntimeError("RabbitMQ connection not established. Call connect() first.")
@@ -37,7 +37,9 @@ class IngestionService:
             "retry_count": 0,
             "created_at": "2025-09-01T12:00:00Z" 
         }
-        
+        if overwrite:
+            job_data["overwrite"] = True
+
         channel = await self.rabbitmq.channel()
         message = aio_pika.Message(
             json.dumps(job_data).encode(),

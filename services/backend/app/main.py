@@ -72,7 +72,7 @@ async def lifespan(app: FastAPI):
         
         for url in predefined_urls:
             try:
-                result = await ingestion_service.queue_job(url, force=False)
+                result = await ingestion_service.queue_job(url, overwrite=False)
                 if result.get("status") == "accepted":
                     queued_count += 1
                     print(f"✅ Queued: {url}")

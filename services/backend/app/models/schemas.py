@@ -19,7 +19,7 @@ class ChatResponse(BaseModel):
 class IngestRequest(BaseModel):
     """Ingest request."""
     url: HttpUrl
-    force: bool = False
+    overwrite: bool = False
 
 
 class IngestResponse(BaseModel):
