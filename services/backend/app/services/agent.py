@@ -128,7 +128,7 @@ METHODOLOGY:
         if not self.vectorstore:
             return "Vectorstore is not available."
         try:
-            results = await asyncio.to_thread(self.vectorstore.similarity_search, query, k=5)
+            results = await asyncio.to_thread(self.vectorstore.similarity_search, query, k=10)
             if not results:
                 return "No relevant article chunks were found for your query."
             context_parts = [
